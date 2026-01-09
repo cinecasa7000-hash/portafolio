@@ -669,7 +669,7 @@ def show_contact():
         st.subheader("📄 Currículum Vitae")
         
         # CV Download Logic
-        cv_path = "rec/LEONARDO NIETO CORTÉS.pdf"
+        cv_path = "rec/CV_Leonardo_Nieto_AI_Engineer.pdf"
         try:
             with open(cv_path, "rb") as pdf_file:
                 pdf_bytes = pdf_file.read()
