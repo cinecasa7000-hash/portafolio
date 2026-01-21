@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor de Planos (Auto-Carga)</title>
+    <script src="https://cdn.jsdelivr.net/npm/dxf-parser@1.1.2/dist/dxf-parser.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <style>
+        :root { 
+            --bg: #111827; --panel: #1f293b; --text: #f3f4f6; 
+            --accent: #60a5fa; --danger: #f87171; --success: #34d399; --excel: #10b981;
+        }
+        
+        body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; height: 100vh; display: flex; overflow: hidden; }
+        
+        /* SIDEBAR (ARCHIVOS) */
+        .sidebar { width: 250px; background: var(--panel); display: flex; flex-direction: column; border-right: 1px solid #374151; }
+        .sidebar-header { padding: 20px; font-weight: 800; font-size: 1.2rem; color: var(--accent); border-bottom: 1px solid #374151; }
+        .file-list { flex: 1; overflow-y: auto; padding: 10px; }
+        .file-item { padding: 12px; margin-bottom: 5px; border-radius: 6px; cursor: pointer; display: flex; justify-content: space-between; color: #9ca3af; }
+        .file-item:hover { background: #374151; color: white; }
+        .file-item.active { background: #2563eb; color: white; font-weight: bold; }
+        
+        .sidebar-actions { padding: 15px; border-top: 1px solid #374151; display: flex; flex-direction: column; gap: 10px; }
+        .btn-add { padding: 12px; background: #374151; color: white; border: 1px dashed #6b7280; cursor: pointer; border-radius: 6px; width: 100%; font-weight: bold; }
+        .btn-add:hover { border-color: white; background: #4b5563; }
+        .btn-global { padding: 12px; background: var(--excel); color: white; border: none; cursor: pointer; border-radius: 6px; width: 100%; font-weight: bold; display: flex; justify-content: center; align-items: center; gap: 8px; }
+        .btn-global:hover { filter: brightness(1.1); }
+
+        /* MAIN CONTENT */
+        .main { flex: 1; display: flex; flex-direction: column; position: relative; }
+        
+        .workspace { flex: 1; display: flex; overflow: hidden; }
+        .map-section { flex: 1; background: #000; position: relative; overflow: hidden; }
+        canvas { cursor: crosshair; display: block; }
+        .controls-section { width: 320px; background: var(--panel); border-left: 1px solid #374151; display: flex; flex-direction: column; }
+        
+        .stats-box { padding: 20px; text-align: center; border-bottom: 1px solid #374151; background: #111827; }
+        .big-number { font-size: 3rem; font-weight: 800; color: var(--accent); line-height: 1; }
+        .zone-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+        .zone-card { background: #1f293b; padding: 10px; border-radius: 6px; border: 1px solid #374151; }
+        .zone-val { font-size: 1.2rem; font-weight: bold; }
+        .zone-lbl { font-size: 0.65rem; text-transform: uppercase; color: #9ca3af; }
+
+        .filter-list { flex: 1; overflow-y: auto; padding: 15px; }
+        .filter-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; background: #374151; margin-bottom: 8px; border-radius: 6px; }
+        .switch { position: relative; display: inline-block; width: 36px; height: 20px; margin-right: 10px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #6b7280; transition: .4s; border-radius: 34px; }
+        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 2px; bottom: 2px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider { background-color: var(--accent); }
+        input:checked + .slider:before { transform: translateX(16px); }
+
+        .btn-report { margin: 20px; padding: 15px; background: var(--success); color: #064e3b; font-weight: bold; border: none; border-radius: 8px; cursor: pointer; font-size: 1rem; text-align: center; }
+        .btn-report:hover { filter: brightness(1.1); }
+
+        .report-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100; display: none; justify-content: center; align-items: center; }
+        .report-paper { width: 800px; max-height: 90vh; background: white; color: #111827; padding: 40px; border-radius: 4px; overflow-y: auto; box-shadow: 0 0 50px rgba(0,0,0,0.5); }
+        .sheet-header { border-bottom: 2px solid #000; padding-bottom: 20px; margin-bottom: 30px; display: flex; justify-content: space-between; }
+        .sheet-title { font-size: 24px; font-weight: bold; text-transform: uppercase; }
+        .sheet-meta { text-align: right; font-size: 14px; color: #4b5563; }
+        .sheet-summary { display: flex; gap: 20px; margin-bottom: 30px; }
+        .summary-box { flex: 1; background: #f3f4f6; padding: 20px; border-radius: 8px; text-align: center; }
+        .sb-num { font-size: 32px; font-weight: bold; color: #1f293b; }
+        .sb-lbl { font-size: 12px; text-transform: uppercase; color: #6b7280; font-weight: bold; }
+        .sheet-table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px; }
+        .sheet-table th { text-align: left; border-bottom: 2px solid #e5e7eb; padding: 10px; color: #4b5563; }
+        .sheet-table td { border-bottom: 1px solid #e5e7eb; padding: 10px; }
+        .btn-close { position: absolute; top: 20px; right: 20px; background: transparent; color: white; border: none; font-size: 2rem; cursor: pointer; }
+        
+        @media print {
+            .report-overlay { position: static; background: white; display: block; }
+            .report-paper { width: 100%; max-height: none; box-shadow: none; padding: 0; }
+            .sidebar, .main, .btn-close, .btn-print-action { display: none !important; }
+        }
+
+        .loader { position: fixed; inset: 0; background: rgba(0,0,0,0.8); color: white; display: none; justify-content: center; align-items: center; z-index: 200; font-size: 1.5rem; flex-direction: column; }
+    </style>
+</head>
+<body>
+
+<div id="loader" class="loader">
+    <div id="loaderText">Conectando con repositorio...</div>
+    <div style="font-size:0.9rem; margin-top:10px; color:#9ca3af" id="loaderSub">Buscando archivos DXF locales</div>
+</div>
+
+<div class="sidebar">
+    <div class="sidebar-header">RAYOS-X DOORS</div>
+    <div class="file-list" id="fileList"></div>
+    <div class="sidebar-actions">
+        <button class="btn-add" onclick="document.getElementById('fileInput').click()">+ Subir Manualmente</button>
+        <button class="btn-global" onclick="downloadGlobalExcel()">📊 Reporte Global Excel</button>
+    </div>
+    <input type="file" id="fileInput" accept=".dxf" multiple style="display:none" />
+</div>
+
+<div class="main">
+    <div id="emptyState" style="position:absolute; inset:0; display:flex; justify-content:center; align-items:center; flex-direction:column; color:#4b5563;">
+        <div style="font-size:4rem;">📂</div>
+        <h2>Cargando Archivos...</h2>
+        <p>Espere un momento por favor</p>
+    </div>
+
+    <div id="workspace" class="workspace" style="display:none;">
+        <div class="map-section">
+            <div style="position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.7); padding:5px 10px; border-radius:4px; font-size:0.8rem; pointer-events:none; color:#facc15;">
+                ⚠️ VISTA EN ESPEJO ACTIVADA<br>
+                <span style="color:#9ca3b8">Línea Roja = Corte de Pisos (Arrastrable)</span>
+            </div>
+            <div id="canvasWrapper" style="width:100%; height:100%; display:flex; justify-content:center; align-items:center;">
+                <canvas id="mapCanvas"></canvas>
+            </div>
+        </div>
+
+        <div class="controls-section">
+            <div class="stats-box">
+                <div class="big-number" id="displayTotal">0</div>
+                <div style="font-size:0.8rem; text-transform:uppercase; color:#6b7280; letter-spacing:1px;">Puertas Totales</div>
+                
+                <div class="zone-grid">
+                    <div class="zone-card">
+                        <div class="zone-val" id="displayLeft" style="color:#60a5fa">0</div>
+                        <div class="zone-lbl">Piso Superior<br>(Vis. Izquierda)</div>
+                    </div>
+                    <div class="zone-card">
+                        <div class="zone-val" id="displayRight" style="color:#34d399">0</div>
+                        <div class="zone-lbl">Piso Inferior<br>(Vis. Derecha)</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="filter-list" id="filterList"></div>
+            <button class="btn-report" onclick="showReport()">📄 GENERAR REPORTE</button>
+        </div>
+    </div>
+</div>
+
+<div id="reportOverlay" class="report-overlay">
+    <button class="btn-close" onclick="closeReport()">&times;</button>
+    <div class="report-paper">
+        <div class="sheet-header">
+            <div>
+                <div class="sheet-title">Reporte de Detección</div>
+                <div style="margin-top:5px; font-size:14px; color:#6b7280;">Modo Espejo Activado</div>
+            </div>
+            <div class="sheet-meta">
+                <div id="repDate">Fecha: --/--/----</div>
+                <div id="repFile" style="font-weight:bold;">Archivo: ...</div>
+            </div>
+        </div>
+
+        <div class="sheet-summary">
+            <div class="summary-box">
+                <div class="sb-num" id="repTotal">0</div>
+                <div class="sb-lbl">Total Puertas</div>
+            </div>
+            <div class="summary-box" style="background:#eff6ff;">
+                <div class="sb-num" style="color:#2563eb;" id="repLeft">0</div>
+                <div class="sb-lbl">Piso Superior (Izq)</div>
+            </div>
+            <div class="summary-box" style="background:#ecfdf5;">
+                <div class="sb-num" style="color:#059669;" id="repRight">0</div>
+                <div class="sb-lbl">Piso Inferior (Der)</div>
+            </div>
+        </div>
+
+        <h3>Desglose por Modelo</h3>
+        <table class="sheet-table">
+            <thead>
+                <tr>
+                    <th>Modelo / Tipo Detectado</th>
+                    <th>Cantidad</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+            <tbody id="repTableBody"></tbody>
+        </table>
+
+        <div style="margin-top:40px; text-align:right;" class="btn-print-action">
+            <button onclick="window.print()" style="padding:10px 20px; background:#111827; color:white; border:none; border-radius:4px; cursor:pointer;">🖨️ Imprimir / Guardar PDF</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- LISTA DE TUS ARCHIVOS ---
+    // Asegúrate de que los nombres coincidan EXACTAMENTE con los archivos en tu carpeta
+    const PLANOS_EN_SERVIDOR = [
+        'ARQ-AY-001.dxf',
+        'ARQ-AY-002.dxf',
+        'ARQ-AY-003.dxf',
+        'ARQ-AY-004.dxf',
+        'ARQ-AY-005.dxf',
+        'ARQ-AY-007.dxf'
+    ];
+
+    const SPLIT_DEFAULT = 0.70; 
+    let db = {}; 
+    let currentKey = null;
+    let isDragging = false;
+    let hoverGroup = null;
+
+    const canvas = document.getElementById('mapCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // --- CARGA AUTOMÁTICA AL INICIAR ---
+    window.addEventListener('load', async () => {
+        const loader = document.getElementById('loader');
+        loader.style.display = 'flex';
+        let exito = false;
+
+        for(let fileName of PLANOS_EN_SERVIDOR) {
+            try {
+                document.getElementById('loaderText').innerText = "Cargando " + fileName + "...";
+                // Fetch intenta descargar el archivo desde la misma carpeta del HTML
+                const response = await fetch(fileName);
+                if(response.ok) {
+                    const text = await response.text();
+                    parseAndStore(fileName, text);
+                    exito = true;
+                } else {
+                    console.warn("No se encontró: " + fileName);
+                }
+            } catch(e) {
+                console.warn("Error cargando " + fileName, e);
+            }
+        }
+
+        loader.style.display = 'none';
+
+        if(exito) {
+            renderSidebar();
+            switchFile(Object.keys(db)[0]); // Abrir el primero
+        } else {
+            // Si falló (probablemente por abrir localmente sin servidor), mostramos mensaje
+            document.getElementById('emptyState').innerHTML = `
+                <div style="font-size:4rem;">⚠️</div>
+                <h2>Modo Local Detectado</h2>
+                <p>Para cargar automáticamente, sube esto a un servidor web.</p>
+                <p>Por ahora, usa el botón <strong>+ Subir Manualmente</strong>.</p>
+            `;
+        }
+    });
+
+    // --- CARGA MANUAL (Respaldo) ---
+    document.getElementById('fileInput').addEventListener('change', async (e) => {
+        const files = Array.from(e.target.files).filter(f => f.name.toLowerCase().endsWith('.dxf'));
+        if(files.length === 0) return;
+        document.getElementById('loader').style.display = 'flex';
+        document.getElementById('loaderText').innerText = "Procesando archivos manuales...";
+        
+        for(let file of files) {
+            const text = await readFile(file);
+            parseAndStore(file.name, text);
+        }
+        
+        renderSidebar();
+        if(!currentKey) switchFile(Object.keys(db)[0]);
+        document.getElementById('loader').style.display = 'none';
+    });
+
+    function readFile(file) {
+        return new Promise(resolve => {
+            const reader = new FileReader();
+            reader.readAsText(file, 'ISO-8859-1');
+            reader.onload = (e) => resolve(e.target.result);
+        });
+    }
+
+    // --- LÓGICA DE PROCESAMIENTO ---
+    function parseAndStore(fileName, fileText) {
+        try {
+            const parser = new DxfParser();
+            const dxf = parser.parseSync(fileText);
+            const extracted = extractData(dxf);
+            
+            db[fileName] = {
+                name: fileName,
+                ...extracted,
+                splitX: extracted.bounds.minX + (extracted.bounds.maxX - extracted.bounds.minX) * SPLIT_DEFAULT,
+                scale: 1, padding: 40
+            };
+            recalc(db[fileName]);
+        } catch(err) { console.error("Error DXF:", err); }
+    }
+
+    function extractData(dxf) {
+        let doors = [], walls = [], groups = {};
+        let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+        dxf.entities.forEach(e => {
+            let pts = e.vertices || (e.position ? [e.position] : []);
+            pts.forEach(p => {
+                minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+                minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+            });
+            if (e.type === 'INSERT' && (e.layer?.includes('DOOR') || e.name?.includes('PUERTA'))) {
+                if (!doors.some(d => Math.hypot(d.x - e.position.x, d.y - e.position.y) < 0.1)) {
+                    let gName = simplifyName(e.name);
+                    let active = !(gName.includes("ELEV") || gName.includes("HOJAS") || gName.includes("CTO"));
+                    if(!groups[gName]) groups[gName] = { name: gName, count: 0, active };
+                    groups[gName].count++;
+                    doors.push({ x: e.position.x, y: e.position.y, group: gName });
+                }
+            } else if (e.type === 'LINE' || e.type === 'LWPOLYLINE') walls.push(e);
+        });
+        return { doors, walls, groups, bounds: {minX, maxX, minY, maxY} };
+    }
+
+    function simplifyName(name) {
+        let n = (name || "").toUpperCase();
+        if(n.includes("ELEV") || n.includes("CTO") || n.includes("HOJAS")) return "ELEVADORES / SERVICIO";
+        if(n.includes("MET") || n.includes("PT4")) return "PUERTAS METÁLICAS";
+        let m = n.match(/(\d{2,3})[\s\-_]+X/);
+        return m ? `PUERTA ESTÁNDAR (${m[1]} cm)` : "OTRAS PUERTAS";
+    }
+
+    function recalc(file) {
+        let total = 0, left = 0, right = 0;
+        file.doors.forEach(d => {
+            if(file.groups[d.group].active) {
+                total++;
+                // ESPEJO: > Split = Izq (Sup)
+                d.x > file.splitX ? left++ : right++;
+            }
+        });
+        file.stats = { total, left, right };
+    }
+
+    function switchFile(key) {
+        currentKey = key;
+        document.getElementById('emptyState').style.display = 'none';
+        document.getElementById('workspace').style.display = 'flex';
+        renderSidebar(); renderControls(); drawMap(); updateDisplay();
+    }
+
+    function renderSidebar() {
+        const list = document.getElementById('fileList');
+        list.innerHTML = Object.keys(db).map(key => `
+            <div class="file-item ${key===currentKey ? 'active' : ''}" onclick="switchFile('${key}')">
+                <span>${db[key].name}</span><span>${db[key].stats.total}</span>
+            </div>
+        `).join('');
+    }
+
+    function renderControls() {
+        const file = db[currentKey];
+        document.getElementById('filterList').innerHTML = Object.keys(file.groups).sort().map(k => {
+            const g = file.groups[k];
+            return `
+            <div class="filter-item" onmouseenter="hoverGroup='${k}'; drawMap()" onmouseleave="hoverGroup=null; drawMap()">
+                <div style="display:flex; align-items:center;">
+                    <label class="switch"><input type="checkbox" ${g.active ? 'checked' : ''} onchange="toggleGroup('${k}')"><span class="slider"></span></label>
+                    <div><div style="font-weight:600; font-size:0.85rem;">${g.name}</div><div style="font-size:0.75rem; color:#9ca3b8;">${g.count} unidades</div></div>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    window.toggleGroup = (k) => {
+        db[currentKey].groups[k].active = !db[currentKey].groups[k].active;
+        recalc(db[currentKey]); updateDisplay(); renderSidebar(); drawMap();
+    };
+
+    function updateDisplay() {
+        const s = db[currentKey].stats;
+        document.getElementById('displayTotal').innerText = s.total;
+        document.getElementById('displayLeft').innerText = s.left;
+        document.getElementById('displayRight').innerText = s.right;
+    }
+
+    function drawMap() {
+        if(!currentKey) return;
+        const f = db[currentKey];
+        const w = canvas.parentElement.clientWidth;
+        const h = canvas.parentElement.clientHeight;
+        canvas.width = w; canvas.height = h;
+
+        const rangeX = f.bounds.maxX - f.bounds.minX;
+        const rangeY = f.bounds.maxY - f.bounds.minY;
+        const scale = Math.min((w - f.padding*2)/rangeX, (h - f.padding*2)/rangeY);
+        f.scale = scale;
+
+        // ESPEJO
+        const toScreen = (x,y) => ({
+            x: w - (f.padding + (x - f.bounds.minX) * scale),
+            y: h - f.padding - (y - f.bounds.minY) * scale
+        });
+
+        ctx.fillStyle = "#000"; ctx.fillRect(0,0,w,h);
+        
+        ctx.strokeStyle = "#374151"; ctx.lineWidth = 1; ctx.beginPath();
+        f.walls.forEach(wa => {
+            if(wa.vertices) {
+                let start = toScreen(wa.vertices[0].x, wa.vertices[0].y);
+                ctx.moveTo(start.x, start.y);
+                for(let i=1; i<wa.vertices.length; i++) {
+                    let next = toScreen(wa.vertices[i].x, wa.vertices[i].y);
+                    ctx.lineTo(next.x, next.y);
+                }
+            }
+        });
+        ctx.stroke();
+
+        f.doors.forEach(d => {
+            if(!f.groups[d.group].active && d.group !== hoverGroup) return;
+            let pos = toScreen(d.x, d.y);
+            ctx.beginPath();
+            let color = (d.x > f.splitX) ? "#60a5fa" : "#34d399";
+            if(d.group === hoverGroup) color = "#facc15";
+            else if(!f.groups[d.group].active) color = "#374151";
+
+            ctx.fillStyle = color;
+            ctx.arc(pos.x, pos.y, d.group === hoverGroup ? 6 : 4, 0, Math.PI*2);
+            ctx.fill();
+        });
+
+        let splitX = toScreen(f.splitX, 0).x;
+        ctx.beginPath(); ctx.strokeStyle = "#f87171"; ctx.lineWidth = 2; ctx.setLineDash([5,5]);
+        ctx.moveTo(splitX, 0); ctx.lineTo(splitX, h); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = "#f87171"; ctx.beginPath(); ctx.arc(splitX, 30, 5, 0, Math.PI*2); ctx.fill();
+    }
+
+    canvas.addEventListener('mousedown', e => {
+        const f = db[currentKey];
+        let sx = canvas.width - (f.padding + (f.splitX - f.bounds.minX) * f.scale);
+        if(Math.abs(e.offsetX - sx) < 20) isDragging = true;
+    });
+
+    window.addEventListener('mousemove', e => {
+        if(!currentKey) return;
+        const f = db[currentKey];
+        if(isDragging) {
+            f.splitX = Math.max(f.bounds.minX, Math.min(f.bounds.maxX, f.bounds.minX + (canvas.width - e.offsetX - f.padding)/f.scale));
+            recalc(f); updateDisplay(); drawMap();
+        } else {
+            let sx = canvas.width - (f.padding + (f.splitX - f.bounds.minX) * f.scale);
+            canvas.style.cursor = Math.abs(e.offsetX - sx) < 20 ? 'ew-resize' : 'default';
+        }
+    });
+
+    window.addEventListener('mouseup', () => isDragging = false);
+    window.addEventListener('resize', drawMap);
+
+    window.showReport = () => {
+        const f = db[currentKey];
+        document.getElementById('reportOverlay').style.display = 'flex';
+        document.getElementById('repFile').innerText = "Archivo: " + f.name;
+        document.getElementById('repDate').innerText = "Fecha: " + new Date().toLocaleDateString();
+        document.getElementById('repTotal').innerText = f.stats.total;
+        document.getElementById('repLeft').innerText = f.stats.left;
+        document.getElementById('repRight').innerText = f.stats.right;
+        document.getElementById('repTableBody').innerHTML = Object.keys(f.groups).sort().map(k => {
+            const g = f.groups[k];
+            if(!g.active) return '';
+            return `<tr><td style="font-weight:bold;">${g.name}</td><td>${g.count}</td><td><span style="background:#d1fae5; color:#065f46; padding:2px 6px; border-radius:4px; font-size:12px;">Activo</span></td></tr>`;
+        }).join('');
+    };
+    window.closeReport = () => document.getElementById('reportOverlay').style.display = 'none';
+
+    window.downloadGlobalExcel = () => {
+        const keys = Object.keys(db);
+        if (keys.length === 0) { alert("Carga archivos primero"); return; }
+        let csv = "\uFEFFArchivo,Modelo de Puerta,Piso Superior (Izq),Piso Inferior (Der),Total\n";
+        keys.forEach(k => {
+            const f = db[k];
+            Object.keys(f.groups).sort().forEach(gName => {
+                const grp = f.groups[gName];
+                if (!grp.active) return;
+                let cSup = 0, cInf = 0;
+                f.doors.forEach(d => {
+                    if(d.group === gName) {
+                        if(d.x > f.splitX) cSup++; else cInf++;
+                    }
+                });
+                csv += `"${f.name}","${gName}",${cSup},${cInf},${cSup+cInf}\n`;
+            });
+        });
+        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "Reporte_Global_Puertas.csv";
+        a.click();
+    };
+</script>
+</body>
+</html>
